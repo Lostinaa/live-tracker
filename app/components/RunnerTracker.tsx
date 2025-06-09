@@ -19,7 +19,7 @@ const DefaultIcon = L.icon({
 
 L.Marker.prototype.options.icon = DefaultIcon
 
-// Validate coordinates
+// Validating  coordinates and check
 const isValidCoordinate = (lat: number, lng: number): boolean => {
   return (
     lat >= -90 && lat <= 90 && // Valid latitude range
@@ -67,12 +67,12 @@ export default function RunnerTracker() {
     setError(null)
 
     try {
-      // Try to get initial position with high accuracy
+      // Try to get initial position within  ---  high accuracy
       let position: GeolocationPosition
       try {
         position = await getCurrentPosition()
-      } catch (err) {
-        // If first attempt fails, try again with less strict settings
+      } catch {
+        //  first attempt fails n tryyy
         try {
           position = await new Promise((resolve, reject) => {
             navigator.geolocation.getCurrentPosition(resolve, reject, {
@@ -94,7 +94,8 @@ export default function RunnerTracker() {
       }
 
       // Check accuracy
-      if (posAccuracy > 100) { // If accuracy is worse than 100 meters
+      if (posAccuracy > 100) { 
+        // If accuracy is worse <100 meters
         setError(`Warning: GPS accuracy is low (${Math.round(posAccuracy)}m). Try moving to an open area.`)
       }
 
@@ -107,7 +108,7 @@ export default function RunnerTracker() {
       setPositions([initialPos])
       setDistance(0)
 
-      // Start continuous tracking with high accuracy
+      // Start continuous tracking with high accuracy (main challenge) 
       const watchId = navigator.geolocation.watchPosition(
         (pos) => {
           const { latitude, longitude, accuracy: newAccuracy } = pos.coords
