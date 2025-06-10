@@ -29,35 +29,6 @@ const isValidCoordinate = (lat: number, lng: number): boolean => {
   )
 }
 
-// Add Kalman filter implementation
-class KalmanFilter {
-  private R: number; // Measurement noise
-  private Q: number; // Process noise
-  private P: number; // Estimation error covariance
-  private X: number; // State estimate
-  private K: number; // Kalman gain
-
-  constructor(R = 0.01, Q = 0.1) {
-    this.R = R; // Measurement noise
-    this.Q = Q; // Process noise
-    this.P = 1; // Estimation error covariance
-    this.X = 0; // State estimate
-    this.K = 0; // Kalman gain
-  }
-
-  filter(measurement: number): number {
-    // Prediction update
-    this.P = this.P + this.Q;
-
-    // Measurement update
-    this.K = this.P / (this.P + this.R);
-    this.X = this.X + this.K * (measurement - this.X);
-    this.P = (1 - this.K) * this.P;
-
-    return this.X;
-  }
-}
-
 // Advanced position processing utilities
 class PositionProcessor {
   private static readonly MIN_ACCURACY = 10; // meters
@@ -231,15 +202,8 @@ export default function RunnerTracker() {
   const [isLoading, setIsLoading] = useState<boolean>(false)
   const [initialPosition, setInitialPosition] = useState<LatLngTuple | null>(null)
   const [accuracy, setAccuracy] = useState<number | null>(null)
-  const [speed, setSpeed] = useState<number>(0)
-  const [heading, setHeading] = useState<number>(0)
   
   // Refs for filters and sensors
-  const latFilter = useRef(new KalmanFilter(0.0001, 0.0001))
-  const lngFilter = useRef(new KalmanFilter(0.0001, 0.0001))
-  const lastPosition = useRef<GeolocationPosition | null>(null)
-  const lastUpdateTime = useRef<number>(0)
-  const motionHandler = useRef<number | null>(null)
   const positionProcessor = useRef(new PositionProcessor());
   const [signalQuality, setSignalQuality] = useState<number>(1);
   const [positionSource, setPositionSource] = useState<'gps' | 'dead-reckoning' | 'prediction'>('gps');
@@ -250,45 +214,6 @@ export default function RunnerTracker() {
       return
     }
   }, [])
-
-  // Initialize motion sensors
-  useEffect(() => {
-    if (window.DeviceMotionEvent) {
-      window.addEventListener('devicemotion', handleMotion)
-    }
-    if (window.DeviceOrientationEvent) {
-      window.addEventListener('deviceorientation', handleOrientation)
-    }
-
-    return () => {
-      if (window.DeviceMotionEvent) {
-        window.removeEventListener('devicemotion', handleMotion)
-      }
-      if (window.DeviceOrientationEvent) {
-        window.removeEventListener('deviceorientation', handleOrientation)
-      }
-    }
-  }, [])
-
-  const handleMotion = (event: DeviceMotionEvent) => {
-    if (event.acceleration) {
-      const { x, y, z } = event.acceleration
-      if (x !== null && y !== null && z !== null) {
-        // Calculate speed from acceleration
-        const acceleration = Math.sqrt(x * x + y * y + z * z)
-        setSpeed(prevSpeed => {
-          const newSpeed = prevSpeed + acceleration * 0.1 // 0.1 is time delta
-          return Math.max(0, newSpeed) // Ensure speed doesn't go negative
-        })
-      }
-    }
-  }
-
-  const handleOrientation = (event: DeviceOrientationEvent) => {
-    if (event.alpha !== null) {
-      setHeading(event.alpha)
-    }
-  }
 
   const getCurrentPosition = (): Promise<GeolocationPosition> => {
     return new Promise((resolve, reject) => {
@@ -302,40 +227,6 @@ export default function RunnerTracker() {
         }
       )
     })
-  }
-
-  const processPosition = (position: GeolocationPosition) => {
-    const { latitude, longitude, accuracy: posAccuracy } = position.coords
-    const currentTime = Date.now()
-
-    // Apply Kalman filter to smooth coordinates
-    const filteredLat = latFilter.current.filter(latitude)
-    const filteredLng = lngFilter.current.filter(longitude)
-
-    // Calculate speed if we have a previous position
-    if (lastPosition.current && lastUpdateTime.current) {
-      const timeDelta = (currentTime - lastUpdateTime.current) / 1000 // Convert to seconds
-      const distance = getDistance(
-        { latitude: lastPosition.current.coords.latitude, longitude: lastPosition.current.coords.longitude },
-        { latitude, longitude }
-      )
-      const calculatedSpeed = distance / timeDelta // meters per second
-      
-      // Use the more accurate speed measurement
-      const finalSpeed = posAccuracy !== null ? posAccuracy : calculatedSpeed
-      setSpeed(finalSpeed)
-    }
-
-    // Update heading if available from GPS
-    if (posAccuracy !== null) {
-      setHeading(posAccuracy)
-    }
-
-    // Store current position for next update
-    lastPosition.current = position
-    lastUpdateTime.current = currentTime
-
-    return [filteredLat, filteredLng] as LatLngTuple
   }
 
   const startTracking = async () => {
