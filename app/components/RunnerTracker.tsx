@@ -1,25 +1,11 @@
 'use client'
 
 import { useEffect, useState, useRef } from 'react'
-import { MapContainer, TileLayer, Polyline, Marker } from 'react-leaflet'
-import { LatLngTuple } from 'leaflet'
+import maplibregl from 'maplibre-gl'
+import 'maplibre-gl/dist/maplibre-gl.css'
 import { getDistance } from 'geolib'
-import L from 'leaflet'
-import 'leaflet/dist/leaflet.css'
 
-// Fix for default marker icons
-const DefaultIcon = L.icon({
-  iconUrl: '/images/marker-icon.svg',
-  shadowUrl: '/images/marker-shadow.svg',
-  iconSize: [25, 41],
-  iconAnchor: [12, 41],
-  popupAnchor: [1, -34],
-  shadowSize: [41, 41]
-})
-
-L.Marker.prototype.options.icon = DefaultIcon
-
-// Validating  coordinates and check
+// Validating coordinates and check
 const isValidCoordinate = (lat: number, lng: number): boolean => {
   return (
     lat >= -90 && lat <= 90 && // Valid latitude range
@@ -99,7 +85,7 @@ class PositionProcessor {
   }
 
   // Position prediction
-  private predictNextPosition(): GeolocationPosition | null {
+  predictNextPosition(): GeolocationPosition | null {
     if (this.positionBuffer.length < 2) return null;
 
     const lastPos = this.positionBuffer[this.positionBuffer.length - 1];
@@ -194,16 +180,17 @@ class PositionProcessor {
 }
 
 export default function RunnerTracker() {
-  const [positions, setPositions] = useState<LatLngTuple[]>([])
+  const [positions, setPositions] = useState<[number, number][]>([])
   const [startTime, setStartTime] = useState<Date | null>(null)
   const [distance, setDistance] = useState<number>(0)
   const [isTracking, setIsTracking] = useState<boolean>(false)
   const [error, setError] = useState<string | null>(null)
   const [isLoading, setIsLoading] = useState<boolean>(false)
-  const [initialPosition, setInitialPosition] = useState<LatLngTuple | null>(null)
+  const [initialPosition, setInitialPosition] = useState<[number, number] | null>(null)
   const [accuracy, setAccuracy] = useState<number | null>(null)
   
-  // Refs for filters and sensors
+  const mapContainer = useRef<HTMLDivElement>(null)
+  const map = useRef<maplibregl.Map | null>(null)
   const positionProcessor = useRef(new PositionProcessor());
   const [signalQuality, setSignalQuality] = useState<number>(1);
   const [positionSource, setPositionSource] = useState<'gps' | 'dead-reckoning' | 'prediction'>('gps');
@@ -214,6 +201,136 @@ export default function RunnerTracker() {
       return
     }
   }, [])
+
+  useEffect(() => {
+    if (!mapContainer.current) return;
+
+    map.current = new maplibregl.Map({
+      container: mapContainer.current,
+      style: {
+        version: 8,
+        sources: {
+          'osm-tiles': {
+            type: 'raster',
+            tiles: ['https://tile.openstreetmap.org/{z}/{x}/{y}.png'],
+            tileSize: 256,
+            attribution: '© OpenStreetMap contributors'
+          }
+        },
+        layers: [
+          {
+            id: 'osm-tiles',
+            type: 'raster',
+            source: 'osm-tiles',
+            minzoom: 0,
+            maxzoom: 19
+          }
+        ]
+      },
+      center: initialPosition || [0, 0],
+      zoom: 18
+    });
+
+    // Wait for the map to load before adding sources and layers
+    map.current.on('load', () => {
+      if (positions.length > 0) {
+        const lastPosition = positions[positions.length - 1];
+        
+        // Add route source and layer
+        map.current?.addSource('route', {
+          type: 'geojson',
+          data: {
+            type: 'Feature',
+            properties: {},
+            geometry: {
+              type: 'LineString',
+              coordinates: positions
+            }
+          }
+        });
+
+        map.current?.addLayer({
+          id: 'route',
+          type: 'line',
+          source: 'route',
+          layout: {
+            'line-join': 'round',
+            'line-cap': 'round'
+          },
+          paint: {
+            'line-color': '#0080ff',
+            'line-width': 4
+          }
+        });
+
+        // Add current position source and layer
+        map.current?.addSource('current-position', {
+          type: 'geojson',
+          data: {
+            type: 'Feature',
+            properties: {},
+            geometry: {
+              type: 'Point',
+              coordinates: lastPosition
+            }
+          }
+        });
+
+        map.current?.addLayer({
+          id: 'current-position',
+          type: 'circle',
+          source: 'current-position',
+          paint: {
+            'circle-radius': 8,
+            'circle-color': '#ff0000',
+            'circle-stroke-width': 2,
+            'circle-stroke-color': '#ffffff'
+          }
+        });
+      }
+    });
+
+    return () => {
+      map.current?.remove();
+    };
+  }, [initialPosition]);
+
+  useEffect(() => {
+    if (!map.current) return;
+
+    // Update map when positions change
+    if (positions.length > 0) {
+      const lastPosition = positions[positions.length - 1];
+      map.current.flyTo({
+        center: lastPosition,
+        essential: true
+      });
+
+      // Update the route line
+      if (map.current.getSource('route')) {
+        (map.current.getSource('route') as maplibregl.GeoJSONSource).setData({
+          type: 'Feature',
+          properties: {},
+          geometry: {
+            type: 'LineString',
+            coordinates: positions
+          }
+        });
+      }
+
+      // Update the current position marker
+      if (map.current.getSource('current-position')) {
+        (map.current.getSource('current-position') as maplibregl.GeoJSONSource).setData({
+          type: 'Feature',
+          properties: {},
+          geometry: {
+            type: 'Point',
+            coordinates: lastPosition
+          }
+        });
+      }
+    }
+  }, [positions]);
 
   const getCurrentPosition = (): Promise<GeolocationPosition> => {
     return new Promise((resolve, reject) => {
@@ -236,12 +353,10 @@ export default function RunnerTracker() {
     setError(null)
 
     try {
-      // Try to get initial position within  ---  high accuracy
       let position: GeolocationPosition
       try {
         position = await getCurrentPosition()
       } catch {
-        //  first attempt fails n tryyy
         try {
           position = await new Promise((resolve, reject) => {
             navigator.geolocation.getCurrentPosition(resolve, reject, {
@@ -257,19 +372,16 @@ export default function RunnerTracker() {
 
       const { latitude, longitude, accuracy: posAccuracy } = position.coords
       
-      // Validate coordinates
       if (!isValidCoordinate(latitude, longitude)) {
         throw new Error('Invalid coordinates received')
       }
 
-      // Check accuracy
       if (posAccuracy > 100) { 
-        // If accuracy is worse <100 meters
         setError(`Warning: GPS accuracy is low (${Math.round(posAccuracy)}m). Try moving to an open area.`)
       }
 
       setAccuracy(posAccuracy)
-      const initialPos: LatLngTuple = [latitude, longitude]
+      const initialPos: [number, number] = [longitude, latitude]
       setInitialPosition(initialPos)
       setIsLoading(false)
       setIsTracking(true)
@@ -277,7 +389,6 @@ export default function RunnerTracker() {
       setPositions([initialPos])
       setDistance(0)
 
-      // Start continuous tracking with high accuracy (main challenge) 
       const watchId = navigator.geolocation.watchPosition(
         (pos) => {
           const processedPosition = positionProcessor.current.processPosition(pos);
@@ -292,16 +403,16 @@ export default function RunnerTracker() {
           setPositions((prev) => {
             if (prev.length > 0) {
               const last = prev[prev.length - 1];
-              getDistance(
-                { latitude: last[0], longitude: last[1] },
+              const dist = getDistance(
+                { latitude: last[1], longitude: last[0] },
                 { latitude, longitude }
               );
-              return [...prev, [latitude, longitude]];
+              setDistance(prev => prev + dist);
+              return [...prev, [longitude, latitude]];
             }
-            return [[latitude, longitude]];
+            return [[longitude, latitude]];
           });
 
-          // Update UI with position source and quality
           setPositionSource(processedPosition === pos ? 'gps' : 'dead-reckoning');
           setSignalQuality(positionProcessor.current.analyzeSignalQuality(processedPosition));
         },
@@ -411,21 +522,7 @@ export default function RunnerTracker() {
         </div>
       </div>
       
-      <div className="flex-1">
-        <MapContainer
-          center={positions[positions.length - 1] || initialPosition || [0, 0]}
-          zoom={18}
-          className="h-full w-full"
-        >
-          <TileLayer url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png" />
-          {positions.length > 0 && (
-            <>
-              <Marker position={positions[positions.length - 1]} />
-              <Polyline positions={positions} color="blue" />
-            </>
-          )}
-        </MapContainer>
-      </div>
+      <div className="flex-1" ref={mapContainer} />
     </div>
   )
 } 
